@@ -24,9 +24,18 @@ async function availablePort() {
 before(async () => {
   const port = await availablePort();
   baseUrl = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, [".next/standalone/server.js"], {
+  server = spawn(process.execPath, ["scripts/start-standalone.mjs"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, HOSTNAME: "127.0.0.1", PORT: String(port) },
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      // An address that never answers, so the healthcheck is exercised against
+      // a database that is unreachable rather than merely unconfigured.
+      DATABASE_URL: "postgresql://hischoir:hischoir@10.255.255.1:5432/hischoir",
+      DATABASE_CONNECT_TIMEOUT_MS: "1000",
+      DATABASE_CHECK_TIMEOUT_MS: "1000",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   server.stdout.on("data", (chunk) => (serverOutput += chunk));
@@ -61,6 +70,16 @@ test("server-renders the HisChoir entry page", () => {
   assert.match(homepageHtml, /One workspace/);
   assert.match(homepageHtml, /director workspace/i);
   assert.doesNotMatch(homepageHtml, /codex-preview|Your site is taking shape/i);
+});
+
+test("answers the Railway healthcheck while the database is unreachable", async () => {
+  const started = Date.now();
+  const response = await fetch(`${baseUrl}/api/health`);
+  const elapsed = Date.now() - started;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: "ok", database: "unavailable" });
+  assert.ok(elapsed < 15_000, `The healthcheck took ${elapsed}ms instead of failing fast.`);
 });
 
 test("uses PostgreSQL and Railway deployment configuration", async () => {

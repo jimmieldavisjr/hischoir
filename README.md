@@ -50,6 +50,26 @@ snapshot until live syncing is configured.
 Drizzle migrations before each release, and verifies `/api/health` before
 traffic moves to the new deployment.
 
+### Healthchecks and networking
+
+`npm start` runs `scripts/start-standalone.mjs` rather than the generated
+`.next/standalone/server.js` directly. That wrapper picks the bind address:
+
+- Next's standalone server listens on `process.env.HOSTNAME || "0.0.0.0"`, and
+  container runtimes set `HOSTNAME` to the container id, which would bind the
+  server to one private address that Railway cannot reach.
+- Railway routes healthchecks and private traffic over IPv6, so the wrapper
+  listens on `::` (which also accepts IPv4) and falls back to `0.0.0.0` on
+  hosts without IPv6. Set `HOST` to override the address.
+
+`/api/health` is a liveness probe: it always answers `200` and reports the
+database as `connected` or `unavailable` in the body. The healthcheck decides
+whether a new deployment replaces the running one, so a database that is still
+waking up must not roll a good release back — connection failures are written to
+the deployment logs instead. Database probes are bounded by
+`DATABASE_CONNECT_TIMEOUT_MS` and `DATABASE_CHECK_TIMEOUT_MS` (5000 each by
+default) so the endpoint can never hang past the healthcheck window.
+
 ## Database migrations
 
 After changing `db/schema.ts`, generate and review a migration:

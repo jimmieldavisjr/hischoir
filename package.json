@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "postbuild": "node scripts/prepare-standalone.mjs",
-    "start": "node .next/standalone/server.js",
+    "start": "node scripts/start-standalone.mjs",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint app components db lib tests scripts drizzle.config.ts eslint.config.mjs next.config.ts",
     "db:generate": "drizzle-kit generate",
