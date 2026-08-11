@@ -1,6 +1,6 @@
-import { ensureSchema } from "@/db";
-import type { Role } from "@/lib/types";
+import { getDatabase, withTransaction } from "@/db";
 import { runtimeEnv } from "@/lib/runtime";
+import type { Role } from "@/lib/types";
 
 const COOKIE = "service_set_session";
 const encoder = new TextEncoder();
@@ -84,26 +84,24 @@ async function attemptKey(request: Request, role: Role) {
 }
 
 export async function isRateLimited(request: Request, role: Role) {
-  const database = await ensureSchema();
   const keyHash = await attemptKey(request, role);
-  const row = await database
-    .prepare(
-      `SELECT COUNT(*) AS count FROM auth_attempts
-       WHERE key_hash = ? AND role = ? AND succeeded = 0
-       AND attempted_at >= datetime('now', '-15 minutes')`,
-    )
-    .bind(keyHash, role)
-    .first<{ count: number }>();
-  return Number(row?.count ?? 0) >= 5;
+  const result = await getDatabase().query<{ count: number }>(
+    `SELECT COUNT(*)::integer AS count
+     FROM auth_attempts
+     WHERE key_hash = $1 AND role = $2 AND succeeded = FALSE
+       AND attempted_at >= NOW() - INTERVAL '15 minutes'`,
+    [keyHash, role],
+  );
+  return Number(result.rows[0]?.count ?? 0) >= 5;
 }
 
 export async function recordAttempt(request: Request, role: Role, succeeded: boolean) {
-  const database = await ensureSchema();
   const keyHash = await attemptKey(request, role);
-  await database.batch([
-    database
-      .prepare("INSERT INTO auth_attempts (key_hash, role, succeeded) VALUES (?, ?, ?)")
-      .bind(keyHash, role, succeeded ? 1 : 0),
-    database.prepare("DELETE FROM auth_attempts WHERE attempted_at < datetime('now', '-1 day')"),
-  ]);
+  await withTransaction(async (database) => {
+    await database.query(
+      "INSERT INTO auth_attempts (key_hash, role, succeeded) VALUES ($1, $2, $3)",
+      [keyHash, role, succeeded],
+    );
+    await database.query("DELETE FROM auth_attempts WHERE attempted_at < NOW() - INTERVAL '1 day'");
+  });
 }

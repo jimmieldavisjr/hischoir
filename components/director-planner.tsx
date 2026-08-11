@@ -14,7 +14,6 @@ import {
   ListMusic,
   LoaderCircle,
   LogOut,
-  MoreHorizontal,
   Music2,
   Plus,
   RefreshCw,
@@ -317,7 +316,7 @@ export function DirectorPlanner() {
                   <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--glass)] p-4">
                     <p className="flex items-center gap-2 text-xs font-semibold"><Library className="size-3.5 text-[var(--accent-light)]" /> Team view</p>
                     <p className="mt-1 text-xs leading-relaxed text-[var(--muted-foreground)]">Notes and changes appear immediately for everyone with the team passcode.</p>
-                    <a className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--accent-light)] hover:underline" href={`/service/${plan.shareToken}`} target="_blank">Open shared service <ExternalLink className="size-3" /></a>
+                    <a className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--accent-light)] hover:underline" href={`/service/${plan.shareToken}`} target="_blank" rel="noreferrer">Open shared service <ExternalLink className="size-3" /></a>
                   </div>
                 </div>
 

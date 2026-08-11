@@ -4,100 +4,74 @@ HisChoir is a full-stack Sabbath worship planning workspace. Directors can build
 song sets from a YouTube playlist, order each Sabbath plan, add rehearsal notes,
 and share a protected live view with the worship team.
 
-Built with TypeScript, Vinext, Tailwind CSS, shadcn-style components, Cloudflare
-D1, and the YouTube Data API.
+The application uses Next.js, TypeScript, Tailwind CSS, PostgreSQL, Drizzle, and
+the YouTube Data API. It is configured for deployment on Railway.
 
-## Prerequisites
+## Local development
+
+Requirements:
 
 - Node.js `>=22.13.0`
+- PostgreSQL
 
-## Quick Start
+Copy `.env.example` to `.env.local`, replace the placeholder values, and then run:
 
 ```bash
 npm install
+npm run db:migrate
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+Required environment variables:
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```env
+ADMIN_PASSCODE=
+TEAM_PASSCODE=
+SESSION_SECRET=
+YOUTUBE_API_KEY=
+DATABASE_URL=
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+`SESSION_SECRET` should contain at least 32 random characters. The YouTube key
+may be left empty while developing; HisChoir will use its bundled playlist
+snapshot until live syncing is configured.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+## Railway deployment
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+1. Create a Railway project from this repository.
+2. Add a PostgreSQL service to the project.
+3. In the app service, add `DATABASE_URL` as a reference to the PostgreSQL
+   service's `DATABASE_URL` variable.
+4. Add `ADMIN_PASSCODE`, `TEAM_PASSCODE`, `SESSION_SECRET`, and
+   `YOUTUBE_API_KEY` to the app service.
+5. Deploy and generate a public domain from the app service's Networking tab.
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+`railway.json` builds the standalone Next.js server, applies the committed
+Drizzle migrations before each release, and verifies `/api/health` before
+traffic moves to the new deployment.
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+## Database migrations
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+After changing `db/schema.ts`, generate and review a migration:
 
-## Useful Commands
+```bash
+npm run db:generate
+```
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+Apply committed migrations locally with:
 
-## Learn More
+```bash
+npm run db:migrate
+```
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+The PostgreSQL migration creates the destination schema; it does not copy data
+from an existing Cloudflare D1 database. If the D1 instance contains production
+service plans, export and import those records before switching the public
+domain to Railway.
+
+## Validation
+
+```bash
+npm run lint
+npm test
+```

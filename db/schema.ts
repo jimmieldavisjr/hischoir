@@ -1,19 +1,30 @@
-import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  boolean,
+  date,
+  index,
+  integer,
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 
-export const songs = sqliteTable(
+export const songs = pgTable(
   "songs",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    youtubeVideoId: text("youtube_video_id").notNull(),
+    id: serial("id").primaryKey(),
+    youtubeVideoId: varchar("youtube_video_id", { length: 32 }).notNull(),
     playlistItemId: text("playlist_item_id"),
     title: text("title").notNull(),
     channel: text("channel").notNull().default(""),
     thumbnailUrl: text("thumbnail_url").notNull(),
-    duration: text("duration").notNull().default(""),
+    duration: varchar("duration", { length: 16 }).notNull().default(""),
     playlistPosition: integer("playlist_position").notNull().default(0),
-    available: integer("available", { mode: "boolean" }).notNull().default(true),
-    syncedAt: text("synced_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    available: boolean("available").notNull().default(true),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("idx_songs_youtube_video_id").on(table.youtubeVideoId),
@@ -21,15 +32,15 @@ export const songs = sqliteTable(
   ],
 );
 
-export const services = sqliteTable(
+export const services = pgTable(
   "services",
   {
-    id: text("id").primaryKey(),
-    serviceDate: text("service_date").notNull(),
+    id: uuid("id").primaryKey(),
+    serviceDate: date("service_date", { mode: "string" }).notNull(),
     label: text("label").notNull().default("Sabbath Worship"),
-    shareToken: text("share_token").notNull(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    shareToken: varchar("share_token", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("idx_services_share_token").on(table.shareToken),
@@ -37,35 +48,39 @@ export const services = sqliteTable(
   ],
 );
 
-export const serviceItems = sqliteTable(
+export const serviceItems = pgTable(
   "service_items",
   {
-    id: text("id").primaryKey(),
-    serviceId: text("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
-    songId: integer("song_id").notNull().references(() => songs.id),
+    id: uuid("id").primaryKey(),
+    serviceId: uuid("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "cascade" }),
+    songId: integer("song_id")
+      .notNull()
+      .references(() => songs.id),
     position: integer("position").notNull().default(0),
     notes: text("notes").notNull().default(""),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_service_items_service_position").on(table.serviceId, table.position)],
 );
 
-export const syncState = sqliteTable("sync_state", {
-  source: text("source").primaryKey(),
-  lastSuccessAt: text("last_success_at"),
-  lastAttemptAt: text("last_attempt_at"),
+export const syncState = pgTable("sync_state", {
+  source: varchar("source", { length: 32 }).primaryKey(),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
   lastError: text("last_error"),
 });
 
-export const authAttempts = sqliteTable(
+export const authAttempts = pgTable(
   "auth_attempts",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     keyHash: text("key_hash").notNull(),
-    role: text("role").notNull(),
-    succeeded: integer("succeeded", { mode: "boolean" }).notNull().default(false),
-    attemptedAt: text("attempted_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    role: varchar("role", { length: 16 }).notNull(),
+    succeeded: boolean("succeeded").notNull().default(false),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_auth_attempts_key_time").on(table.keyHash, table.attemptedAt)],
 );

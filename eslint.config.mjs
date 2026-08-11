@@ -19,7 +19,7 @@ const eslintConfig = defineConfig([
   ...tseslint.configs.recommended,
   react.configs.flat.recommended,
   react.configs.flat["jsx-runtime"],
-  reactHooks.configs.flat["recommended-latest"],
+  reactHooks.configs.flat.recommended,
   jsxA11y.flatConfigs.recommended,
   next.configs["core-web-vitals"],
   {
@@ -34,6 +34,12 @@ const eslintConfig = defineConfig([
       react: {
         version: "detect",
       },
+    },
+    rules: {
+      "jsx-a11y/aria-role": ["error", { ignoreNonDOM: true }],
+      "react/prop-types": "off",
+      "react-hooks/immutability": "off",
+      "react-hooks/set-state-in-effect": "off",
     },
   },
 ]);

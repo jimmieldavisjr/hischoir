@@ -1,4 +1,4 @@
-import { ensureSchema } from "@/db";
+import { getDatabase, type Queryable, withTransaction } from "@/db";
 import { PLAYLIST_ID } from "@/lib/catalog";
 import type { PlannerPayload, ServiceItem, ServicePlan, ServiceSummary, Song, SyncState } from "@/lib/types";
 import { hasYouTubeKey, seedPlaylistSnapshot, syncYouTubePlaylist } from "@/lib/youtube";
@@ -11,7 +11,7 @@ type SongRow = {
   thumbnail_url: string;
   duration: string;
   playlist_position: number;
-  available: number;
+  available: boolean;
 };
 
 type ServiceRow = {
@@ -28,6 +28,8 @@ type ItemRow = SongRow & {
   notes: string;
 };
 
+type TimestampValue = Date | string | null;
+
 let brandReady: Promise<unknown> | undefined;
 
 function mapSong(row: SongRow): Song {
@@ -39,7 +41,7 @@ function mapSong(row: SongRow): Song {
     thumbnailUrl: row.thumbnail_url,
     duration: row.duration,
     playlistPosition: row.playlist_position,
-    available: Boolean(row.available),
+    available: row.available,
   };
 }
 
@@ -51,6 +53,11 @@ function mapService(row: ServiceRow): ServiceSummary {
     shareToken: row.share_token,
     itemCount: Number(row.item_count ?? 0),
   };
+}
+
+function isoTimestamp(value: TimestampValue) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
 function randomToken() {
@@ -80,67 +87,79 @@ function nextSabbath() {
 }
 
 export async function prepareAppData() {
-  const database = await ensureSchema();
+  const database = getDatabase();
   brandReady ??= database
-    .prepare(
+    .query(
       `UPDATE services
        SET service_date = CASE
-         WHEN strftime('%w', service_date) = '0' THEN date(service_date, '-1 day')
+         WHEN EXTRACT(DOW FROM service_date) = 0 THEN service_date - 1
          ELSE service_date
        END,
        label = 'Sabbath Worship',
        updated_at = CURRENT_TIMESTAMP
        WHERE label = 'Sunday Worship'`,
     )
-    .run();
+    .catch((error) => {
+      brandReady = undefined;
+      throw error;
+    });
   await brandReady;
   await seedPlaylistSnapshot();
-  const count = await database.prepare("SELECT COUNT(*) AS count FROM services").first<{ count: number }>();
-  if (Number(count?.count ?? 0) === 0) {
-    await database
-      .prepare("INSERT INTO services (id, service_date, label, share_token) VALUES (?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), nextSabbath(), "Sabbath Worship", randomToken())
-      .run();
-  }
+  await database.query(
+    `INSERT INTO services (id, service_date, label, share_token)
+     SELECT $1, $2, $3, $4
+     WHERE NOT EXISTS (SELECT 1 FROM services)`,
+    [crypto.randomUUID(), nextSabbath(), "Sabbath Worship", randomToken()],
+  );
   return database;
+}
+
+async function listServicesWith(database: Queryable): Promise<ServiceSummary[]> {
+  const result = await database.query<ServiceRow>(
+    `SELECT s.id, s.service_date, s.label, s.share_token,
+            COUNT(si.id)::integer AS item_count
+     FROM services s
+     LEFT JOIN service_items si ON si.service_id = s.id
+     GROUP BY s.id
+     ORDER BY s.service_date ASC, s.created_at ASC`,
+  );
+  return result.rows.map(mapService);
 }
 
 export async function listServices(): Promise<ServiceSummary[]> {
   const database = await prepareAppData();
-  const result = await database
-    .prepare(
-      `SELECT s.id, s.service_date, s.label, s.share_token, COUNT(si.id) AS item_count
-       FROM services s LEFT JOIN service_items si ON si.service_id = s.id
-       GROUP BY s.id ORDER BY s.service_date ASC, s.created_at ASC`,
-    )
-    .all<ServiceRow>();
-  return result.results.map(mapService);
+  return listServicesWith(database);
 }
 
-export async function getServicePlan(identifier: string, byToken = false): Promise<ServicePlan | null> {
-  const database = await prepareAppData();
+async function getServicePlanWith(
+  database: Queryable,
+  identifier: string,
+  byToken = false,
+): Promise<ServicePlan | null> {
   const column = byToken ? "share_token" : "id";
-  const row = await database
-    .prepare(
-      `SELECT s.id, s.service_date, s.label, s.share_token, COUNT(si.id) AS item_count
-       FROM services s LEFT JOIN service_items si ON si.service_id = s.id
-       WHERE s.${column} = ? GROUP BY s.id`,
-    )
-    .bind(identifier)
-    .first<ServiceRow>();
+  const serviceResult = await database.query<ServiceRow>(
+    `SELECT s.id, s.service_date, s.label, s.share_token,
+            COUNT(si.id)::integer AS item_count
+     FROM services s
+     LEFT JOIN service_items si ON si.service_id = s.id
+     WHERE s.${column} = $1
+     GROUP BY s.id`,
+    [identifier],
+  );
+  const row = serviceResult.rows[0];
   if (!row) return null;
 
-  const result = await database
-    .prepare(
-      `SELECT si.id AS item_id, si.position, si.notes,
-              so.id, so.youtube_video_id, so.title, so.channel, so.thumbnail_url,
-              so.duration, so.playlist_position, so.available
-       FROM service_items si JOIN songs so ON so.id = si.song_id
-       WHERE si.service_id = ? ORDER BY si.position ASC, si.created_at ASC`,
-    )
-    .bind(row.id)
-    .all<ItemRow>();
-  const items: ServiceItem[] = result.results.map((item) => ({
+  const itemResult = await database.query<ItemRow>(
+    `SELECT si.id AS item_id, si.position, si.notes,
+            so.id, so.youtube_video_id, so.title, so.channel, so.thumbnail_url,
+            so.duration, so.playlist_position, so.available
+     FROM service_items si
+     JOIN songs so ON so.id = si.song_id
+     WHERE si.service_id = $1
+     ORDER BY si.position ASC, si.created_at ASC`,
+    [row.id],
+  );
+  const items: ServiceItem[] = itemResult.rows.map((item) => ({
     ...mapSong(item),
     itemId: item.item_id,
     position: item.position,
@@ -149,14 +168,21 @@ export async function getServicePlan(identifier: string, byToken = false): Promi
   return { ...mapService(row), items };
 }
 
+export async function getServicePlan(identifier: string, byToken = false): Promise<ServicePlan | null> {
+  const database = await prepareAppData();
+  return getServicePlanWith(database, identifier, byToken);
+}
+
 async function getSyncState(): Promise<SyncState> {
-  const database = await ensureSchema();
-  const row = await database
-    .prepare("SELECT last_success_at, last_attempt_at, last_error FROM sync_state WHERE source = 'youtube'")
-    .first<{ last_success_at: string | null; last_attempt_at: string | null; last_error: string | null }>();
+  const result = await getDatabase().query<{
+    last_success_at: TimestampValue;
+    last_attempt_at: TimestampValue;
+    last_error: string | null;
+  }>("SELECT last_success_at, last_attempt_at, last_error FROM sync_state WHERE source = 'youtube'");
+  const row = result.rows[0];
   return {
-    lastSuccessAt: row?.last_success_at ?? null,
-    lastAttemptAt: row?.last_attempt_at ?? null,
+    lastSuccessAt: isoTimestamp(row?.last_success_at ?? null),
+    lastAttemptAt: isoTimestamp(row?.last_attempt_at ?? null),
     lastError: row?.last_error ?? null,
   };
 }
@@ -174,21 +200,20 @@ export async function getPlannerPayload(serviceId?: string): Promise<PlannerPayl
     sync = await getSyncState();
   }
 
-  const [songRows, services] = await Promise.all([
-    database
-      .prepare(
-        `SELECT id, youtube_video_id, title, channel, thumbnail_url, duration,
-                playlist_position, available FROM songs
-         ORDER BY available DESC, playlist_position ASC, title ASC`,
-      )
-      .all<SongRow>(),
-    listServices(),
+  const [songResult, services] = await Promise.all([
+    database.query<SongRow>(
+      `SELECT id, youtube_video_id, title, channel, thumbnail_url, duration,
+              playlist_position, available
+       FROM songs
+       ORDER BY available DESC, playlist_position ASC, title ASC`,
+    ),
+    listServicesWith(database),
   ]);
   const selected = services.find((service) => service.id === serviceId) ?? services[0] ?? null;
   return {
-    songs: songRows.results.map(mapSong),
+    songs: songResult.rows.map(mapSong),
     services,
-    selectedService: selected ? await getServicePlan(selected.id) : null,
+    selectedService: selected ? await getServicePlanWith(database, selected.id) : null,
     sync,
     playlistId: PLAYLIST_ID,
     configured: hasYouTubeKey(),
@@ -198,107 +223,102 @@ export async function getPlannerPayload(serviceId?: string): Promise<PlannerPayl
 export async function createService(serviceDate: string, label: string) {
   const database = await prepareAppData();
   const id = crypto.randomUUID();
-  await database
-    .prepare("INSERT INTO services (id, service_date, label, share_token) VALUES (?, ?, ?, ?)")
-    .bind(id, serviceDate, label, randomToken())
-    .run();
-  return getServicePlan(id);
+  await database.query(
+    "INSERT INTO services (id, service_date, label, share_token) VALUES ($1, $2, $3, $4)",
+    [id, serviceDate, label, randomToken()],
+  );
+  return getServicePlanWith(database, id);
 }
 
 export async function updateService(id: string, serviceDate: string, label: string) {
   const database = await prepareAppData();
-  await database
-    .prepare("UPDATE services SET service_date = ?, label = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-    .bind(serviceDate, label, id)
-    .run();
-  return getServicePlan(id);
+  await database.query(
+    "UPDATE services SET service_date = $1, label = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
+    [serviceDate, label, id],
+  );
+  return getServicePlanWith(database, id);
 }
 
 export async function deleteService(id: string) {
   const database = await prepareAppData();
-  await database.prepare("DELETE FROM services WHERE id = ?").bind(id).run();
+  await database.query("DELETE FROM services WHERE id = $1", [id]);
 }
 
 export async function duplicateService(id: string, serviceDate: string) {
   const database = await prepareAppData();
-  const source = await getServicePlan(id);
+  const source = await getServicePlanWith(database, id);
   if (!source) throw new Error("Service plan not found.");
   const duplicateId = crypto.randomUUID();
-  const writes = [
-    database
-      .prepare("INSERT INTO services (id, service_date, label, share_token) VALUES (?, ?, ?, ?)")
-      .bind(duplicateId, serviceDate, source.label, randomToken()),
-  ];
-  for (const item of source.items) {
-    writes.push(
-      database
-        .prepare("INSERT INTO service_items (id, service_id, song_id, position, notes) VALUES (?, ?, ?, ?, ?)")
-        .bind(crypto.randomUUID(), duplicateId, item.id, item.position, item.notes),
+  await withTransaction(async (client) => {
+    await client.query(
+      "INSERT INTO services (id, service_date, label, share_token) VALUES ($1, $2, $3, $4)",
+      [duplicateId, serviceDate, source.label, randomToken()],
     );
-  }
-  await database.batch(writes);
-  return getServicePlan(duplicateId);
+    for (const item of source.items) {
+      await client.query(
+        "INSERT INTO service_items (id, service_id, song_id, position, notes) VALUES ($1, $2, $3, $4, $5)",
+        [crypto.randomUUID(), duplicateId, item.id, item.position, item.notes],
+      );
+    }
+  });
+  return getServicePlanWith(database, duplicateId);
 }
 
 export async function addSong(serviceId: string, songId: number) {
   const database = await prepareAppData();
-  const position = await database
-    .prepare("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM service_items WHERE service_id = ?")
-    .bind(serviceId)
-    .first<{ position: number }>();
-  await database
-    .prepare("INSERT INTO service_items (id, service_id, song_id, position) VALUES (?, ?, ?, ?)")
-    .bind(crypto.randomUUID(), serviceId, songId, Number(position?.position ?? 0))
-    .run();
-  return getServicePlan(serviceId);
+  await database.query(
+    `INSERT INTO service_items (id, service_id, song_id, position)
+     SELECT $1, $2, $3, COALESCE(MAX(position), -1) + 1
+     FROM service_items
+     WHERE service_id = $2`,
+    [crypto.randomUUID(), serviceId, songId],
+  );
+  return getServicePlanWith(database, serviceId);
 }
 
 export async function updateItem(serviceId: string, itemId: string, notes: string) {
   const database = await prepareAppData();
-  await database
-    .prepare(
-      "UPDATE service_items SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND service_id = ?",
-    )
-    .bind(notes, itemId, serviceId)
-    .run();
-  return getServicePlan(serviceId);
+  await database.query(
+    "UPDATE service_items SET notes = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND service_id = $3",
+    [notes, itemId, serviceId],
+  );
+  return getServicePlanWith(database, serviceId);
 }
 
 export async function removeItem(serviceId: string, itemId: string) {
-  const database = await prepareAppData();
-  await database.prepare("DELETE FROM service_items WHERE id = ? AND service_id = ?").bind(itemId, serviceId).run();
-  const rows = await database
-    .prepare("SELECT id FROM service_items WHERE service_id = ? ORDER BY position, created_at")
-    .bind(serviceId)
-    .all<{ id: string }>();
-  if (rows.results.length) {
-    await database.batch(
-      rows.results.map((row, position) =>
-        database.prepare("UPDATE service_items SET position = ? WHERE id = ?").bind(position, row.id),
-      ),
+  await prepareAppData();
+  await withTransaction(async (database) => {
+    await database.query("DELETE FROM service_items WHERE id = $1 AND service_id = $2", [itemId, serviceId]);
+    const result = await database.query<{ id: string }>(
+      "SELECT id FROM service_items WHERE service_id = $1 ORDER BY position, created_at",
+      [serviceId],
     );
-  }
-  return getServicePlan(serviceId);
+    for (const [position, row] of result.rows.entries()) {
+      await database.query("UPDATE service_items SET position = $1 WHERE id = $2", [position, row.id]);
+    }
+  });
+  return getServicePlanWith(getDatabase(), serviceId);
 }
 
 export async function reorderItems(serviceId: string, itemIds: string[]) {
-  const database = await prepareAppData();
-  const existing = await database
-    .prepare("SELECT id FROM service_items WHERE service_id = ?")
-    .bind(serviceId)
-    .all<{ id: string }>();
-  const allowed = new Set(existing.results.map((row) => row.id));
-  if (itemIds.length !== allowed.size || itemIds.some((id) => !allowed.has(id))) {
-    throw new Error("The service order changed. Refresh and try again.");
-  }
-  if (itemIds.length) {
-    await database.batch(
-      itemIds.map((id, position) =>
-        database
-          .prepare("UPDATE service_items SET position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND service_id = ?")
-          .bind(position, id, serviceId),
-      ),
+  await prepareAppData();
+  await withTransaction(async (database) => {
+    const result = await database.query<{ id: string }>(
+      "SELECT id FROM service_items WHERE service_id = $1 FOR UPDATE",
+      [serviceId],
     );
-  }
-  return getServicePlan(serviceId);
+    const allowed = new Set(result.rows.map((row) => row.id));
+    if (itemIds.length !== allowed.size || itemIds.some((id) => !allowed.has(id))) {
+      throw new Error("The service order changed. Refresh and try again.");
+    }
+    for (const [position, id] of itemIds.entries()) {
+      await database.query(
+        `UPDATE service_items
+         SET position = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2 AND service_id = $3`,
+        [position, id, serviceId],
+      );
+    }
+  });
+  return getServicePlanWith(getDatabase(), serviceId);
 }
