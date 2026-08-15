@@ -1,0 +1,44 @@
+{
+  "name": "hischoir-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HisChoir NestJS API. Deployed to Railway alongside PostgreSQL.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "lint": "eslint src drizzle.config.ts eslint.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/config.test.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.6",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.1",
+    "drizzle-orm": "0.45.2",
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@nestjs/cli": "^11.0.10",
+    "@nestjs/schematics": "^11.0.8",
+    "@types/cookie-parser": "^1.4.9",
+    "@types/express": "^5.0.3",
+    "@types/node": "22.19.19",
+    "@types/pg": "^8.15.5",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "globals": "16.4.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.59.3"
+  }
+}
