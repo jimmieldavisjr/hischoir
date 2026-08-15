@@ -92,6 +92,18 @@ button { cursor: pointer; }
 }
 .animate-fade-up { animation: fade-up .45s ease-out both; }
 
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in { animation: fade-in .2s ease-out both; }
+
+@keyframes slide-in-right {
+  from { opacity: .4; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.animate-slide-in-right { animation: slide-in-right .26s cubic-bezier(.32, .72, 0, 1) both; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
